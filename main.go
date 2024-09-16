@@ -14,6 +14,7 @@ type CertificateUpdateOptions struct {
 	Password        string `arg:"--pass,required"`
 	KeyPath         string `arg:"--key,required"`
 	CertificatePath string `arg:"--cert,required"`
+	KeyPass         string `arg:"--keypass"`
 }
 
 func updateCertificate(options CertificateUpdateOptions) error {
@@ -44,7 +45,7 @@ func updateCertificate(options CertificateUpdateOptions) error {
 
 	fmt.Printf("Updating TLS certificate\n")
 	var message string
-	if message, err = client.UpdateTLSCertificate(sessionInfo.Sid, "", []io.ReadCloser{certificate, key}); err != nil {
+	if message, err = client.UpdateTLSCertificate(sessionInfo.Sid, options.KeyPass, []io.ReadCloser{certificate, key}); err != nil {
 		return err
 	}
 	fmt.Printf("Finished updating TLS certificate: %s\n", message)

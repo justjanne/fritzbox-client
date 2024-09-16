@@ -3,7 +3,7 @@
 Allows updating the TLS certificate automatically (e.g., as acme post-hook)
 
 ```
-Usage: fritzbox-client --host HOST --user USER --pass PASS --key KEY --cert CERT
+Usage: fritzbox-client --host HOST --user USER --pass PASS --key KEY --cert CERT [--keypass KEYPASS]
 ```
 
 Inspired by [wikrie]/[fritzbox-cert-update.sh]
