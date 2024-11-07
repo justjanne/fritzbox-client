@@ -1,13 +1,17 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 type FritzboxClient struct {
@@ -49,7 +53,13 @@ func (c *FritzboxClient) challengeResponseLogin(sid SessionID, username string, 
 	}
 	var result SessionInfo
 	err = xml.NewDecoder(resp.Body).Decode(&result)
-	return result, err
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	if result.Sid == "0000000000000000" {
+		return SessionInfo{}, errors.New("login failed")
+	}
+	return result, nil
 }
 
 func (c *FritzboxClient) Login(username string, password string) (SessionInfo, error) {
@@ -111,4 +121,131 @@ func (c *FritzboxClient) UpdateTLSCertificate(id SessionID, password string, fil
 	}
 
 	return updateMessage, nil
+}
+
+func decodeEmbeddedJson(reader io.Reader, v interface{}, prefix string, suffix string) error {
+	scanner := bufio.NewScanner(reader)
+	const maxCapacity int = 256 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, prefix) && strings.HasSuffix(line, suffix) {
+			line = line[len(prefix) : len(line)-len(suffix)]
+			if err := json.Unmarshal([]byte(line), &v); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	return errors.New("could not find embedded json")
+}
+
+func (c *FritzboxClient) ListPhoneNumbers(id SessionID) ([]PhoneNumber, error) {
+	requestUrl := c.baseUrl.JoinPath("/fon_num/fon_num_list.lua").String()
+
+	values := url.Values{
+		"xhr": {"1"},
+		"sid": {string(id)},
+	}
+
+	var data []PhoneNumber
+	var err error
+	var resp *http.Response
+	if resp, err = c.httpClient.PostForm(requestUrl, values); err != nil {
+		return data, err
+	}
+	if err = decodeEmbeddedJson(resp.Body, &data, "var gFonNums = ", ";"); err != nil {
+		return data, err
+	}
+	return data, nil
+}
+
+func (c *FritzboxClient) GetPhoneNumber(id SessionID, phoneNumberId string) (PhoneNumber, error) {
+	requestUrl := c.baseUrl.JoinPath("/data.lua").String()
+
+	params := fmt.Sprintf(
+		"xhr=1&uid=%s&sid=%s&page=sip_edit",
+		phoneNumberId,
+		string(id),
+	)
+	var data PhoneNumber
+	var err error
+	var resp *http.Response
+	if resp, err = c.httpClient.Post(requestUrl, "application/x-www-form-urlencoded", strings.NewReader(params)); err != nil {
+		return data, err
+	}
+
+	if err = decodeEmbeddedJson(resp.Body, &data, "const g_fondata = [", "];"); err != nil {
+		return data, err
+	}
+	return data, nil
+}
+
+func (c *FritzboxClient) DisableSIP(id SessionID, sipID string) error {
+	requestUrl := c.baseUrl.JoinPath("/data.lua").String()
+
+	values := url.Values{
+		"xhr":   {"1"},
+		"isnew": {"0"},
+		"uid":   {sipID},
+		"sid":   {string(id)},
+		"page":  {"sip_edit"},
+		"apply": {""},
+	}
+
+	var err error
+	var resp *http.Response
+	if resp, err = c.httpClient.PostForm(requestUrl, values); err != nil {
+		return err
+	}
+
+	var updateResult UpdateResult
+	if err = json.NewDecoder(resp.Body).Decode(&updateResult); err != nil {
+		return err
+	}
+	if updateResult.Data.Apply == "valerror" {
+		return errors.New(updateResult.Data.ValError.Alert)
+	}
+	if updateResult.Data.Apply != "ok" {
+		return errors.New("unknown error while processing response")
+	}
+	return nil
+}
+
+func (c *FritzboxClient) EnableSIP(id SessionID, sipID string, provider string, areaCode string, localNumber string, username string, password string) error {
+	requestUrl := c.baseUrl.JoinPath("/data.lua").String()
+
+	values := url.Values{
+		"xhr":            {"1"},
+		"isnew":          {"0"},
+		"sipactive":      {"on"},
+		"sipprovider":    {provider},
+		"numberinput1_1": {areaCode},
+		"numberinput2_1": {localNumber},
+		"username":       {username},
+		"password":       {password},
+		"uid":            {sipID},
+		"sid":            {string(id)},
+		"page":           {"sip_edit"},
+		"apply":          {""},
+	}
+
+	var err error
+	var resp *http.Response
+	if resp, err = c.httpClient.PostForm(requestUrl, values); err != nil {
+		return err
+	}
+
+	var updateResult UpdateResult
+	if err = json.NewDecoder(resp.Body).Decode(&updateResult); err != nil {
+		return err
+	}
+	if updateResult.Data.Apply == "valerror" {
+		return errors.New(updateResult.Data.ValError.Alert)
+	}
+	if updateResult.Data.Apply != "ok" {
+		return errors.New("unknown error while processing response")
+	}
+	return nil
 }

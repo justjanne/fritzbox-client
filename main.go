@@ -1,62 +1,48 @@
 package main
 
 import (
-	"fmt"
-	"fritzbox-client/api"
+	"errors"
 	"github.com/alexflint/go-arg"
-	"io"
+	"log"
 	"os"
+	"strings"
 )
 
-type CertificateUpdateOptions struct {
-	Hostname        string `arg:"--host,required"`
-	Username        string `arg:"--user,required"`
-	Password        string `arg:"--pass,required"`
-	KeyPath         string `arg:"--key,required"`
-	CertificatePath string `arg:"--cert,required"`
-	KeyPass         string `arg:"--keypass"`
-}
-
-func updateCertificate(options CertificateUpdateOptions) error {
-	var err error
-
-	var client api.FritzboxClient
-	if client, err = api.NewClient(options.Hostname); err != nil {
-		return err
-	}
-
-	fmt.Printf("Logging in to %s as %s\n", options.Hostname, options.Username)
-	var sessionInfo api.SessionInfo
-	if sessionInfo, err = client.Login(options.Username, options.Password); err != nil {
-		return err
-	}
-
-	fmt.Printf("Loading certificate from %s\n", options.CertificatePath)
-	var certificate io.ReadCloser
-	if certificate, err = os.Open(options.CertificatePath); err != nil {
-		return err
-	}
-
-	fmt.Printf("Loading key from %s\n", options.KeyPath)
-	var key io.ReadCloser
-	if key, err = os.Open(options.KeyPath); err != nil {
-		return err
-	}
-
-	fmt.Printf("Updating TLS certificate\n")
-	var message string
-	if message, err = client.UpdateTLSCertificate(sessionInfo.Sid, options.KeyPass, []io.ReadCloser{certificate, key}); err != nil {
-		return err
-	}
-	fmt.Printf("Finished updating TLS certificate: %s\n", message)
-
-	return nil
+type args struct {
+	Hostname string       `arg:"--host,required" placeholder:"host"`
+	Username string       `arg:"--user,required" placeholder:"user"`
+	Password string       `arg:"--pass,required" placeholder:"pass"`
+	Sip      *sipCommand  `arg:"subcommand:sip"`
+	Cert     *certCommand `arg:"subcommand:cert"`
 }
 
 func main() {
-	var args CertificateUpdateOptions
-	arg.MustParse(&args)
-	if err := updateCertificate(args); err != nil {
-		panic(err)
+	var args args
+	p, err := arg.NewParser(arg.Config{}, &args)
+	if err != nil {
+		log.Fatalf("there was an error in the definition of the Go struct: %v", err)
+	}
+
+	err = p.Parse(os.Args[1:])
+	switch {
+	case errors.Is(err, arg.ErrHelp):
+		_ = p.WriteHelpForSubcommand(os.Stdout, p.SubcommandNames()...)
+		os.Exit(0)
+	case err != nil:
+		_ = p.WriteUsageForSubcommand(os.Stdout, p.SubcommandNames()...)
+		os.Exit(64)
+	}
+
+	if args.Sip != nil && (strings.EqualFold(args.Sip.Task, "reconnect") || strings.EqualFold(args.Sip.Task, "disconnect") || strings.EqualFold(args.Sip.Task, "connect")) {
+		if err := commandSip(args); err != nil {
+			os.Exit(1)
+		}
+	} else if args.Cert != nil {
+		if err := commandCert(args); err != nil {
+			os.Exit(1)
+		}
+	} else {
+		_ = p.WriteHelpForSubcommand(os.Stdout, p.SubcommandNames()...)
+		os.Exit(64)
 	}
 }
